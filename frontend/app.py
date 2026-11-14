@@ -9,57 +9,16 @@ st.set_page_config(page_title="Aral Trend Detective", layout="wide")
 RUST_API_URL = "http://localhost:8080"
 
 
-# ==============================================================================
-# >>> STERGE DE AICI (BUCATA 1/2: Matematica temporara in Python) <<<
-# ==============================================================================
-LOCAL_PARQUET_PATH = "raw_landsat_grid.parquet"
-
-@st.cache_data
-def _temporary_python_math_mock():
-    df = pd.read_parquet(LOCAL_PARQUET_PATH)
-
-    baseline = df[df['year'] <= 1992]
-    base_stats = baseline.groupby(['latitude', 'longitude']).agg(
-        mean_ndwi=('ndwi', 'mean'),
-        std_ndwi=('ndwi', 'std'),
-        mean_lst=('lst_c', 'mean'),
-        std_lst=('lst_c', 'std')
-    ).reset_index()
-
-    df = df.merge(base_stats, on=['latitude', 'longitude'], how='left')
-    df['z_ndwi'] = ((df['ndwi'] - df['mean_ndwi']) / (df['std_ndwi'].fillna(0.05) + 0.03)).round(2)
-    df['z_lst'] = ((df['lst_c'] - df['mean_lst']) / (df['std_lst'].fillna(2.0) + 0.5)).round(2)
-    df['ndwi'] = df['ndwi'].round(3)
-    df['lst_c'] = df['lst_c'].round(1)
-    if 'salinity_index' in df.columns:
-        df['salinity_index'] = df['salinity_index'].round(3)
-
-    was_water = df['mean_ndwi'] > 0.0
-    df['anom_water'] = (df['z_ndwi'] <= -2.0) | (was_water & (df['ndwi'] < -0.05))
-    df['anom_temp'] = df['z_lst'] >= 1.8
-    df['anom_combined'] = df['anom_water'] & df['anom_temp']
-    df['severity'] = (df['z_ndwi'].abs() + df['z_lst'].clip(lower=0)).round(2)
-    return df
-# ==============================================================================
-# >>> PANA AICI (BUCATA 1/2) <<<
-# ==============================================================================
-
-
 def fetch_year_data(year: int) -> pd.DataFrame:
     try:
-        resp = requests.get(f"{RUST_API_URL}/anomalies", params={"year": year}, timeout=1.0)
+        resp = requests.get(f"{RUST_API_URL}/anomalies", params={"year": year}, timeout=5.0)
         resp.raise_for_status()
         df = pd.DataFrame(resp.json()).rename(columns={"lat": "latitude", "lon": "longitude"})
         st.sidebar.success("Conectat la Rust Engine (Live)")
         return df
     except Exception as e:
-        # >>> STERGE DE AICI (BUCATA 2/2: Fallback-ul local) <<<
-        st.sidebar.warning("MOCK ACTIV: Se ruleaza matematica temporara in Python (Rust offline)")
-        mock_df = _temporary_python_math_mock()
-        return mock_df[mock_df['year'] == year].copy()
-        # >>> PANA AICI (BUCATA 2/2) — cand stergi liniile de sus, lasa doar cele 2 linii de jos: <<<
-        # st.error(f"Serverul Rust este oprit ({e}). Porneste backend-ul!")
-        # st.stop()
+        st.error(f"Serverul Rust este oprit ({e}). Porneste backend-ul cu `./run.sh`!")
+        st.stop()
 
 
 with st.sidebar:
