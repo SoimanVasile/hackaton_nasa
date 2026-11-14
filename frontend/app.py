@@ -139,3 +139,4 @@ selected_objects = event.selection.get("objects", {}).get("aral-grid", [])
 if selected_objects:
     cell = selected_objects[0]
     st.info(f"**Diagnostic Celulă:** {cell['motiv']} | **Coordonate:** `{cell['latitude']}, {cell['longitude']}` | **NDWI:** `{cell['ndwi']}` (Z: `{cell['z_ndwi']}`) | **Temp:** `{cell['lst_c']} °C` (Z: `{cell['z_lst']}`)")
+    
