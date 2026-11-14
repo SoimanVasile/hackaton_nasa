@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::analytics::{compute_statistics, compute_z_score};
+use crate::analytics::{compute_median_mad, compute_robust_z_score, compute_statistics};
 use crate::error::AppError;
 use crate::query_parquet::GridDataset;
 
@@ -58,6 +58,7 @@ pub struct GridAnomalyRecord {
     pub anom_water: bool,
     pub anom_temp: bool,
     pub anom_combined: bool,
+    pub anom_desiccation: bool,
     pub severity: f64,
 }
 
@@ -103,16 +104,32 @@ pub async fn anomalies(
             let sal_val = (dataset.salinity_index[idx] * 1000.0).round() / 1000.0;
 
             let base = dataset.location_baselines.get(&coord_bits);
-            let (z_ndwi, z_lst, anom_water, anom_temp, anom_combined, severity) = if let Some(b) = base {
-                let z_n = ((dataset.ndwi[idx] - b.base_mean_ndwi) / (b.base_std_ndwi + 0.03) * 100.0).round() / 100.0;
-                let z_l = ((dataset.lst_c[idx] - b.base_mean_lst) / (b.base_std_lst + 0.5) * 100.0).round() / 100.0;
-                let a_w = (z_n <= -2.0) || (b.was_water && dataset.ndwi[idx] < -0.05);
-                let a_t = z_l >= 1.8;
-                let a_c = a_w && a_t;
+            let (z_ndwi, z_lst, anom_water, anom_temp, anom_combined, anom_desiccation, severity) = if let Some(b) = base {
+                let z_n = (compute_robust_z_score(dataset.ndwi[idx], b.base_median_ndwi, b.base_mad_ndwi) * 100.0).round() / 100.0;
+                let z_l = (compute_robust_z_score(dataset.lst_c[idx], b.base_median_lst, b.base_mad_lst) * 100.0).round() / 100.0;
+                let z_salinity = compute_robust_z_score(
+                    dataset.salinity_index[idx],
+                    b.base_median_salinity,
+                    b.base_mad_salinity,
+                );
+                let prior_water = dataset.location_index.get(&coord_bits).is_some_and(|indices| {
+                    indices.iter().any(|&history_idx| {
+                        dataset.ndwi[history_idx] > 0.0
+                            && (dataset.years[history_idx] < yr
+                                || (1984..=1992).contains(&dataset.years[history_idx]))
+                    })
+                });
+                let ever_water = b.was_water || prior_water || z_n < -1.5;
+                let lost_water = ever_water && dataset.ndwi[idx] <= 0.0;
+                let a_d = dataset.ndwi[idx] < -0.05 || z_salinity > 3.0;
+                let a_w = (z_n < -2.0) || lost_water;
+                let a_t = z_l > 2.0;
+                let a_c = lost_water
+                    && (z_l > 1.5 || dataset.lst_c[idx] > b.base_median_lst);
                 let sev = ((z_n.abs() + z_l.max(0.0)) * 100.0).round() / 100.0;
-                (z_n, z_l, a_w, a_t, a_c, sev)
+                (z_n, z_l, a_w, a_t, a_c, a_d, sev)
             } else {
-                (0.0, 0.0, false, false, false, 0.0)
+                (0.0, 0.0, false, false, false, dataset.ndwi[idx] < -0.05, 0.0)
             };
 
             records.push(GridAnomalyRecord {
@@ -127,6 +144,7 @@ pub async fn anomalies(
                 anom_water,
                 anom_temp,
                 anom_combined,
+                anom_desiccation,
                 severity,
             });
         }
@@ -181,6 +199,7 @@ pub async fn anomalies(
     let stats = compute_statistics(&x_years, &y_vals).ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!("Insufficient data to compute statistics"))
     })?;
+    let (robust_median, robust_mad) = compute_median_mad(&y_vals).unwrap_or((stats.mean, 0.0));
 
     let mut anomalies = Vec::new();
     for (i, &idx) in sorted_indices.iter().enumerate() {
@@ -193,7 +212,7 @@ pub async fn anomalies(
 
         let val = y_vals[i];
         let anomaly = val - stats.mean;
-        let z_score = compute_z_score(val, stats.mean, stats.std_dev);
+        let z_score = compute_robust_z_score(val, robust_median, robust_mad);
 
         anomalies.push(AnomalyPoint {
             timestamp: dataset.timestamps[idx].clone(),

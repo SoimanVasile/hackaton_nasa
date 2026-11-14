@@ -6,6 +6,12 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 
+use crate::analytics::compute_median_mad;
+
+fn mean_for_rows(values: &[f64], indices: &[usize]) -> f64 {
+    indices.iter().map(|&idx| values[idx]).sum::<f64>() / indices.len() as f64
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Metrics {
     pub ndwi: f64,
@@ -50,10 +56,18 @@ pub fn extract_metric_values<'a>(batch: &'a RecordBatch, column_name: &str) -> a
 pub struct LocationBaseline {
     pub mean: Metrics,
     pub std_dev: Metrics,
+    pub median: Metrics,
+    pub mad: Metrics,
     pub base_mean_ndwi: f64,
     pub base_std_ndwi: f64,
     pub base_mean_lst: f64,
     pub base_std_lst: f64,
+    pub base_median_ndwi: f64,
+    pub base_mad_ndwi: f64,
+    pub base_median_lst: f64,
+    pub base_mad_lst: f64,
+    pub base_median_salinity: f64,
+    pub base_mad_salinity: f64,
     pub was_water: bool,
 }
 
@@ -74,7 +88,7 @@ pub struct GridDataset {
     pub unique_coordinates: Vec<(f64, f64)>,
     /// Map year -> Vec<row_index> for instant O(1) year/box queries
     pub year_index: HashMap<i32, Vec<usize>>,
-    /// Precomputed baseline (mean, std_dev) per location for instant full-grid anomaly calculation
+    /// Precomputed descriptive and robust statistics per location for instant grid queries
     pub location_baselines: HashMap<(u64, u64), LocationBaseline>,
 }
 
@@ -123,7 +137,21 @@ impl GridDataset {
 
             for i in 0..num_rows {
                 // Safeguard against null entries in Arrow buffers
-                if ts_col.is_null(i) || lat_col.is_null(i) || lon_col.is_null(i) {
+                if ts_col.is_null(i)
+                    || lat_col.is_null(i)
+                    || lon_col.is_null(i)
+                    || ndwi_col.is_null(i)
+                    || lst_col.is_null(i)
+                    || ndvi_col.is_null(i)
+                    || sal_col.is_null(i)
+                {
+                    continue;
+                }
+
+                let lst_value = lst_col.value(i);
+                // The parquet schema stores already-scaled Celsius composites.
+                // Keep the source values unchanged; ignore non-finite observations.
+                if !lst_value.is_finite() {
                     continue;
                 }
 
@@ -132,11 +160,55 @@ impl GridDataset {
                 latitudes.push(lat_col.value(i));
                 longitudes.push(lon_col.value(i));
                 ndwi.push(ndwi_col.value(i));
-                lst_c.push(lst_col.value(i));
+                lst_c.push(lst_value);
                 ndvi.push(ndvi_col.value(i));
                 salinity_index.push(sal_col.value(i));
             }
         }
+
+        // Collapse repeated observations to one annual mean per grid cell. This
+        // averages every remaining valid row instead of retaining a peak slice.
+        let mut annual_groups: HashMap<(u64, u64, i32), Vec<usize>> = HashMap::new();
+        for idx in 0..years.len() {
+            annual_groups
+                .entry((latitudes[idx].to_bits(), longitudes[idx].to_bits(), years[idx]))
+                .or_default()
+                .push(idx);
+        }
+        let mut annual_groups: Vec<_> = annual_groups.into_iter().collect();
+        annual_groups.sort_by(|((lat_a, lon_a, year_a), _), ((lat_b, lon_b, year_b), _)| {
+            f64::from_bits(*lat_a)
+                .total_cmp(&f64::from_bits(*lat_b))
+                .then_with(|| f64::from_bits(*lon_a).total_cmp(&f64::from_bits(*lon_b)))
+                .then_with(|| year_a.cmp(year_b))
+        });
+
+        let mut annual_timestamps = Vec::with_capacity(annual_groups.len());
+        let mut annual_years = Vec::with_capacity(annual_groups.len());
+        let mut annual_latitudes = Vec::with_capacity(annual_groups.len());
+        let mut annual_longitudes = Vec::with_capacity(annual_groups.len());
+        let mut annual_ndwi = Vec::with_capacity(annual_groups.len());
+        let mut annual_lst_c = Vec::with_capacity(annual_groups.len());
+        let mut annual_ndvi = Vec::with_capacity(annual_groups.len());
+        let mut annual_salinity_index = Vec::with_capacity(annual_groups.len());
+        for ((lat_bits, lon_bits, year), indices) in annual_groups {
+            annual_timestamps.push(timestamps[indices[0]].clone());
+            annual_years.push(year);
+            annual_latitudes.push(f64::from_bits(lat_bits));
+            annual_longitudes.push(f64::from_bits(lon_bits));
+            annual_ndwi.push(mean_for_rows(&ndwi, &indices));
+            annual_lst_c.push(mean_for_rows(&lst_c, &indices));
+            annual_ndvi.push(mean_for_rows(&ndvi, &indices));
+            annual_salinity_index.push(mean_for_rows(&salinity_index, &indices));
+        }
+        timestamps = annual_timestamps;
+        years = annual_years;
+        latitudes = annual_latitudes;
+        longitudes = annual_longitudes;
+        ndwi = annual_ndwi;
+        lst_c = annual_lst_c;
+        ndvi = annual_ndvi;
+        salinity_index = annual_salinity_index;
 
         // Build spatial index and year index at startup
         let mut location_index: HashMap<(u64, u64), Vec<usize>> = HashMap::new();
@@ -179,6 +251,27 @@ impl GridDataset {
                 salinity_index: sum_sal / n,
             };
 
+            let all_ndwi: Vec<f64> = row_idxs.iter().map(|&i| ndwi[i]).collect();
+            let all_lst: Vec<f64> = row_idxs.iter().map(|&i| lst_c[i]).collect();
+            let all_ndvi: Vec<f64> = row_idxs.iter().map(|&i| ndvi[i]).collect();
+            let all_sal: Vec<f64> = row_idxs.iter().map(|&i| salinity_index[i]).collect();
+            let (median_ndwi, mad_ndwi) = compute_median_mad(&all_ndwi).unwrap_or((mean.ndwi, 0.0));
+            let (median_lst, mad_lst) = compute_median_mad(&all_lst).unwrap_or((mean.lst_c, 0.0));
+            let (median_ndvi, mad_ndvi) = compute_median_mad(&all_ndvi).unwrap_or((mean.ndvi, 0.0));
+            let (median_sal, mad_sal) = compute_median_mad(&all_sal).unwrap_or((mean.salinity_index, 0.0));
+            let median = Metrics {
+                ndwi: median_ndwi,
+                lst_c: median_lst,
+                ndvi: median_ndvi,
+                salinity_index: median_sal,
+            };
+            let mad = Metrics {
+                ndwi: mad_ndwi,
+                lst_c: mad_lst,
+                ndvi: mad_ndvi,
+                salinity_index: mad_sal,
+            };
+
             let denom = if row_idxs.len() > 1 { (row_idxs.len() - 1) as f64 } else { 1.0 };
             let (mut var_ndwi, mut var_lst, mut var_ndvi, mut var_sal) = (0.0, 0.0, 0.0, 0.0);
             for &i in row_idxs {
@@ -196,7 +289,9 @@ impl GridDataset {
 
             // Historical reference baseline 1984-1992 (Aral Sea baseline period)
             let early_rows: Vec<usize> = row_idxs.iter().copied().filter(|&i| years[i] <= 1992).collect();
-            let (base_mean_ndwi, base_std_ndwi, base_mean_lst, base_std_lst) = if !early_rows.is_empty() {
+            let (base_mean_ndwi, base_std_ndwi, base_mean_lst, base_std_lst,
+                 base_median_ndwi, base_mad_ndwi, base_median_lst, base_mad_lst,
+                 base_median_salinity, base_mad_salinity) = if !early_rows.is_empty() {
                 let e_n = early_rows.len() as f64;
                 let e_sum_ndwi: f64 = early_rows.iter().map(|&i| ndwi[i]).sum();
                 let e_sum_lst: f64 = early_rows.iter().map(|&i| lst_c[i]).sum();
@@ -207,20 +302,38 @@ impl GridDataset {
                 let var_e_lst: f64 = early_rows.iter().map(|&i| (lst_c[i] - m_lst).powi(2)).sum();
                 let s_ndwi = if early_rows.len() > 1 { (var_e_ndwi / e_denom).sqrt() } else { 0.05 };
                 let s_lst = if early_rows.len() > 1 { (var_e_lst / e_denom).sqrt() } else { 2.0 };
-                (m_ndwi, s_ndwi, m_lst, s_lst)
+                let early_ndwi: Vec<f64> = early_rows.iter().map(|&i| ndwi[i]).collect();
+                let early_lst: Vec<f64> = early_rows.iter().map(|&i| lst_c[i]).collect();
+                let early_salinity: Vec<f64> = early_rows.iter().map(|&i| salinity_index[i]).collect();
+                let (med_ndwi, mad_ndwi) = compute_median_mad(&early_ndwi).unwrap_or((m_ndwi, 0.0));
+                let (med_lst, mad_lst) = compute_median_mad(&early_lst).unwrap_or((m_lst, 0.0));
+                let (med_salinity, mad_salinity) = compute_median_mad(&early_salinity)
+                    .unwrap_or((median.salinity_index, mad.salinity_index));
+                (m_ndwi, s_ndwi, m_lst, s_lst, med_ndwi, mad_ndwi, med_lst, mad_lst,
+                 med_salinity, mad_salinity)
             } else {
-                (mean.ndwi, std_dev.ndwi, mean.lst_c, std_dev.lst_c)
+                (mean.ndwi, std_dev.ndwi, mean.lst_c, std_dev.lst_c,
+                 median.ndwi, mad.ndwi, median.lst_c, mad.lst_c,
+                 median.salinity_index, mad.salinity_index)
             };
 
-            let was_water = base_mean_ndwi > 0.0;
+            let was_water = base_median_ndwi > 0.0;
 
             location_baselines.insert(coord_bits, LocationBaseline {
                 mean,
                 std_dev,
+                median,
+                mad,
                 base_mean_ndwi,
                 base_std_ndwi,
                 base_mean_lst,
                 base_std_lst,
+                base_median_ndwi,
+                base_mad_ndwi,
+                base_median_lst,
+                base_mad_lst,
+                base_median_salinity,
+                base_mad_salinity,
                 was_water,
             });
         }
@@ -315,6 +428,17 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn annual_lst_matches_friend_groupby_mean_without_clipping() {
+        let values = [42.0, 50.77, 55.0];
+        let indices = [0, 1, 2];
+        // Ionut's dashboard computes annual LST with groupby(year).mean().
+        let expected_groupby_mean = values.iter().sum::<f64>() / values.len() as f64;
+        let actual_annual_mean = mean_for_rows(&values, &indices);
+        assert!((actual_annual_mean - expected_groupby_mean).abs() < 1e-12);
+        assert!((actual_annual_mean - 49.25666666666667).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_parquet_loading_and_spatial_query() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = [
@@ -329,8 +453,18 @@ mod tests {
             return;
         };
         let dataset = load_observations(&path).expect("Failed to load dataset");
-        assert_eq!(dataset.timestamps.len(), 446494);
+        assert_eq!(dataset.timestamps.len(), dataset.lst_c.len());
+        assert!(dataset.lst_c.iter().all(|value| value.is_finite()));
+        assert!(dataset.lst_c.iter().any(|value| *value > 45.0));
         assert_eq!(dataset.unique_coordinates.len(), 10302);
+        let annual_keys: std::collections::HashSet<_> = dataset
+            .years
+            .iter()
+            .zip(&dataset.latitudes)
+            .zip(&dataset.longitudes)
+            .map(|((&year, &latitude), &longitude)| (year, latitude.to_bits(), longitude.to_bits()))
+            .collect();
+        assert_eq!(annual_keys.len(), dataset.timestamps.len());
 
         // Test nearest coord
         let coord = dataset.find_nearest_coord(35.0, -115.0).expect("nearest coord found");

@@ -68,6 +68,40 @@ pub fn compute_z_score(val: f64, mean: f64, std_dev: f64) -> f64 {
     }
 }
 
+/// Returns the median and median absolute deviation for finite observations.
+pub fn compute_median_mad(values: &[f64]) -> Option<(f64, f64)> {
+    let mut sorted: Vec<f64> = values.iter().copied().filter(|value| value.is_finite()).collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(f64::total_cmp);
+    let median = median_of_sorted(&sorted);
+    let mut deviations: Vec<f64> = sorted.iter().map(|value| (value - median).abs()).collect();
+    deviations.sort_by(f64::total_cmp);
+    Some((median, median_of_sorted(&deviations)))
+}
+
+fn median_of_sorted(sorted: &[f64]) -> f64 {
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[middle - 1] + sorted[middle]) / 2.0
+    } else {
+        sorted[middle]
+    }
+}
+
+/// Robust Z-score using 0.6745 * (value - median) / MAD.
+/// A zero-MAD baseline has no measurable spread, so return 0 instead of an
+/// unbounded score caused by dividing by an arbitrary tiny epsilon.
+#[inline]
+pub fn compute_robust_z_score(value: f64, median: f64, mad: f64) -> f64 {
+    if !value.is_finite() || !median.is_finite() || !mad.is_finite() || mad <= f64::EPSILON {
+        0.0
+    } else {
+        0.6745 * (value - median) / mad
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

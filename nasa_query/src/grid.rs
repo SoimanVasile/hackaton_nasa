@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::analytics::compute_z_score;
+use crate::analytics::compute_robust_z_score;
 use crate::error::AppError;
 use crate::query_parquet::{GridDataset, Metrics};
 
@@ -122,10 +122,10 @@ pub async fn box_handler(
                 salinity_index: values.salinity_index - baseline.mean.salinity_index,
             };
             let z = Metrics {
-                ndwi: compute_z_score(values.ndwi, baseline.mean.ndwi, baseline.std_dev.ndwi),
-                lst_c: compute_z_score(values.lst_c, baseline.mean.lst_c, baseline.std_dev.lst_c),
-                ndvi: compute_z_score(values.ndvi, baseline.mean.ndvi, baseline.std_dev.ndvi),
-                salinity_index: compute_z_score(values.salinity_index, baseline.mean.salinity_index, baseline.std_dev.salinity_index),
+                ndwi: compute_robust_z_score(values.ndwi, baseline.median.ndwi, baseline.mad.ndwi),
+                lst_c: compute_robust_z_score(values.lst_c, baseline.median.lst_c, baseline.mad.lst_c),
+                ndvi: compute_robust_z_score(values.ndvi, baseline.median.ndvi, baseline.mad.ndvi),
+                salinity_index: compute_robust_z_score(values.salinity_index, baseline.median.salinity_index, baseline.mad.salinity_index),
             };
             (a, z)
         } else {

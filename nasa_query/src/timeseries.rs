@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::analytics::{compute_statistics, compute_z_score};
+use crate::analytics::{compute_median_mad, compute_robust_z_score, compute_statistics};
 use crate::error::AppError;
 use crate::query_parquet::{GridDataset, Metrics};
 
@@ -121,6 +121,10 @@ pub async fn timeseries(
         slope: 0.0,
         intercept: 0.0,
     });
+    let ndvi_robust = compute_median_mad(&ndvi_vals).unwrap_or((ndvi_stats.mean, 0.0));
+    let ndwi_robust = compute_median_mad(&ndwi_vals).unwrap_or((ndwi_stats.mean, 0.0));
+    let lst_robust = compute_median_mad(&lst_vals).unwrap_or((lst_stats.mean, 0.0));
+    let sal_robust = compute_median_mad(&sal_vals).unwrap_or((sal_stats.mean, 0.0));
 
     for m in &metrics_list {
         let stats = match *m {
@@ -161,10 +165,10 @@ pub async fn timeseries(
                 salinity_index: values.salinity_index - sal_stats.mean,
             };
             let z_score = Metrics {
-                ndwi: compute_z_score(values.ndwi, ndwi_stats.mean, ndwi_stats.std_dev),
-                lst_c: compute_z_score(values.lst_c, lst_stats.mean, lst_stats.std_dev),
-                ndvi: compute_z_score(values.ndvi, ndvi_stats.mean, ndvi_stats.std_dev),
-                salinity_index: compute_z_score(values.salinity_index, sal_stats.mean, sal_stats.std_dev),
+                ndwi: compute_robust_z_score(values.ndwi, ndwi_robust.0, ndwi_robust.1),
+                lst_c: compute_robust_z_score(values.lst_c, lst_robust.0, lst_robust.1),
+                ndvi: compute_robust_z_score(values.ndvi, ndvi_robust.0, ndvi_robust.1),
+                salinity_index: compute_robust_z_score(values.salinity_index, sal_robust.0, sal_robust.1),
             };
 
             TimeseriesPoint {
