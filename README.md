@@ -1,4 +1,4 @@
-# 🛰️ Aral Trend Detective (Earth System Detective)
+# Trend Detective (Earth System Detective)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
