@@ -12,35 +12,35 @@ A high-performance geospatial analytics engine and 3D visual intelligence platfo
 
 ---
 
-## 🌟 Key Features
+## Key Features
 
-* **⚡ Ultra-High Throughput Rust Engine (`nasa_query`):**
+* * Ultra-High Throughput Rust Engine (`nasa_query`):**
   * Built with **Axum**, **Tokio**, and **Apache Arrow / Parquet (`arrow-rs` v60)**.
   * In-memory columnar storage (`GridDataset`) managing **446,494 observations** across **10,302 unique 8km × 8km grid cells**.
   * Pre-computed spatial and temporal indices providing **sub-millisecond ($O(1)$) lookups** without per-request allocations.
   * Native SIMD-friendly vector operations over primitive contiguous float slices (`&[f64]`).
 
-* **📊 Rigorous Statistical & Anomaly Engine:**
+* ** Rigorous Statistical & Anomaly Engine:**
   * **Ordinary Least Squares (OLS) Linear Regression:** Calculates long-term trendline slopes ($\beta$) to measure decades of gradual surface warming and drying.
   * **Z-Score Normalization:** Evaluates deviations against the historical reference period (**1984–1992**, before acute Aral desiccation accelerated).
   * **Multi-Hazard Anomaly Classification:**
-    * 💧 **Water Desiccation (`anom_water`):** Identifies severe NDWI drops ($Z_{\text{ndwi}} \le -2.0$) or historical water loss.
-    * 🌡️ **Thermal Shock (`anom_temp`):** Flags extreme Land Surface Temperature spikes ($Z_{\text{lst}} \ge 1.8$).
-    * ⚠️ **Combined Crisis (`anom_combined`):** Pinpoints zones suffering simultaneous desiccation and heat shock.
-    * 📈 **Compound Severity:** Computes cumulative stress index ($|Z_{\text{ndwi}}| + \max(0, Z_{\text{lst}})$).
+    * **Water Desiccation (`anom_water`):** Identifies severe NDWI drops ($Z_{\text{ndwi}} \le -2.0$) or historical water loss.
+    * **Thermal Shock (`anom_temp`):** Flags extreme Land Surface Temperature spikes ($Z_{\text{lst}} \ge 1.8$).
+    * **Combined Crisis (`anom_combined`):** Pinpoints zones suffering simultaneous desiccation and heat shock.
+    * **Compound Severity:** Computes cumulative stress index ($|Z_{\text{ndwi}}| + \max(0, Z_{\text{lst}})$).
 
-* **🗺️ 3D Geospatial Interactive Map (`frontend`):**
+* ** 3D Geospatial Interactive Map (`frontend`):**
   * Rendered with **Streamlit** and **PyDeck (Deck.gl)**.
   * Dynamic timeline slider from **1984 to 2026**.
   * Multi-mode color coding: status diagnostics, water index (NDWI), temperature (LST °C), and soil salinity.
   * Single-cell click inspection tooltips for localized diagnostics.
 
-* **🛰️ Harmonized Multi-Sensor Data Ingestion (`backend`):**
+* ** Harmonized Multi-Sensor Data Ingestion (`backend`):**
   * Automated Google Earth Engine (GEE) pipeline harmonizing **Landsat 4, 5, 7, 8, and 9 Collection 2 Level-2 Surface Reflectance / Surface Temperature**.
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
                        ┌──────────────────────────────────────────────┐
@@ -73,7 +73,7 @@ A high-performance geospatial analytics engine and 3D visual intelligence platfo
 
 ---
 
-## 🚀 Quick Start (One Command)
+##  Quick Start (One Command)
 
 ### Prerequisites
 
@@ -102,7 +102,7 @@ Open **`http://localhost:8501`** in your browser to explore the dashboard.
 
 ---
 
-## 📡 REST API Reference
+##  REST API Reference
 
 The Rust backend serves on `http://localhost:8080` (CORS enabled):
 
@@ -167,7 +167,7 @@ curl -s "http://localhost:8080/box?year=2020&bbox=58.0,43.0,59.0,44.0" | jq .
 
 ---
 
-## 📐 Scientific & Mathematical Formulation
+##  Scientific & Mathematical Formulation
 
 | Metric | Formulation | Description |
 | :--- | :--- | :--- |
@@ -180,7 +180,7 @@ curl -s "http://localhost:8080/box?year=2020&bbox=58.0,43.0,59.0,44.0" | jq .
 
 ---
 
-## 📁 Repository Structure
+##  Repository Structure
 
 ```
 hackaton_nasa/
@@ -207,7 +207,7 @@ hackaton_nasa/
 
 ---
 
-## 👥 Authors & Team
+##  Authors & Team
 
 Developed with pride for the **NASA Space Apps Hackathon** by **Soiman Vasile** and team.
 
