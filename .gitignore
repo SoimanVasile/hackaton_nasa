@@ -1,3 +1,6 @@
 /nasa_query/target
 /data
 *.parquet
+.idea/
+__pycache__/
+*.pyc
