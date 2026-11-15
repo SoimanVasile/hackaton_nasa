@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-RUST_API_URL = "http://localhost:8080"
+RUST_API_URL = os.environ.get("NASA_QUERY_URL", "http://localhost:8080")
 
 COLORS = {
     "bg": "#050505",
@@ -484,10 +484,16 @@ def load_and_compute_region(region_key: str) -> pd.DataFrame:
 def fetch_region_data(region_key: str) -> pd.DataFrame:
     """Fetch processed dataset from Rust backend (if updated) or fallback to cached Python."""
     import socket
+    from urllib.parse import urljoin
+
+    bound_url = os.environ.get("NASA_QUERY_URL")
+    base_url = bound_url or RUST_API_URL
     try:
-        with socket.create_connection(("127.0.0.1", 8080), timeout=0.05):
-            pass
-        resp = requests.get(f"{RUST_API_URL}/anomalies_all", params={"region": region_key}, timeout=0.25)
+        if not bound_url:
+            with socket.create_connection(("127.0.0.1", 8080), timeout=0.05):
+                pass
+        target_url = urljoin(base_url.rstrip("/") + "/", "anomalies_all")
+        resp = requests.get(target_url, params={"region": region_key}, timeout=5.0 if bound_url else 0.25)
         resp.raise_for_status()
         df_rust = pd.DataFrame(resp.json()).rename(columns={"lat": "latitude", "lon": "longitude"})
         if not {"base_urban", "is_water_now", "anom_ice", "r_def"}.issubset(df_rust.columns):
